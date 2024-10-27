@@ -1,1 +1,172 @@
-<h1>helloworld</h1>
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>FFmpeg在线转码（FFmpeg网页版）</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="FFmpeg在线转码。在浏览器中使用FFmpeg进行转换。专家模式需要熟悉FFmpeg参数。由于wasm效率，仅推荐用于转换短视频或音频文件。">
+    <link crossorigin="anonymous" rel="stylesheet" href="https://unpkg.com/element-ui@2.15.14/lib/theme-chalk/index.css">
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+
+        gtag('config', 'G-ZZZQVLS89C');
+    </script>
+</head>
+<body>
+<div id="app" style="margin-left: 10%; margin-right: 10%;">
+    <h1>小球app(正在开发版)</h1>
+    <!-- <h2>系统介绍</h2> -->
+    <h2>一键转码</h2>
+    <el-form :inline="true">
+        <el-form-item label="">
+            <el-upload ref="upload" :on-change="handleFiles" :auto-upload="false" limit="1" multiple="false" :on-exceed="handleExceed">
+                <el-button size="big" type="primary">选择文件</el-button>
+            </el-upload>
+        </el-form-item>
+        <el-form-item label="-o">
+            <el-input placeholder="输出文件名" v-model="outputName" class="input-with-select" style="width: 150px"></el-input>
+        </el-form-item>
+        <el-form-item>
+            <el-button size="big" type="success" @click="start" v-loading="loading">运行</el-button>
+        </el-form-item>
+    </el-form>
+</div>
+</body>
+<script crossorigin="anonymous" src="https://unpkg.com/vue@2.7.16/dist/vue.min.js"></script>
+<script crossorigin="anonymous" src="https://unpkg.com/element-ui@2.15.14/lib/index.js"></script>
+<script>
+const baseURLFFMPEG = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd';
+const baseURLCore = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+const baseURLCoreMT = 'https://unpkg.com/@ffmpeg/core-mt@0.12.6/dist/umd';
+var ffmpeg = null;
+var tryMultiThread = false; // currently use false since it's not stable
+
+const fetchFile = async (url) => {
+    var resp = await fetch(url);
+    var buffer = await resp.arrayBuffer();
+    return new Uint8Array(buffer);
+};
+
+const toBlobURLPatched = async (url, mimeType, patcher) => {
+    var resp = await fetch(url);
+    var body = await resp.text();
+    if (patcher) body = patcher(body);
+    var blob = new Blob([body], {
+        type: mimeType
+    });
+    return URL.createObjectURL(blob);
+};
+
+const toBlobURL = async (url, mimeType) => {
+    var resp = await fetch(url);
+    var body = await resp.blob();
+    var blob = new Blob([body], {
+        type: mimeType
+    });
+    return URL.createObjectURL(blob);
+};
+
+function log(message) {
+    document.getElementById("tty")
+        .innerHTML = document.getElementById("tty")
+        .innerHTML + "</br>" + message;
+}
+
+const load = async () => {
+    const ffmpegBlobURL = await toBlobURLPatched(`${baseURLFFMPEG}/ffmpeg.js`, 'text/javascript', (js) => js.replace('new URL(e.p+e.u(814),e.b)', 'r.workerLoadURL'));
+    await import(ffmpegBlobURL);
+    ffmpeg = new FFmpegWASM.FFmpeg();
+    ffmpeg.on('log', ({
+        message
+    }) => {
+        log(message);
+        console.log(message);
+    });
+    if (tryMultiThread && window.crossOriginIsolated) {
+        console.log("multi-threaded");
+        await ffmpeg.load({
+            workerLoadURL: await toBlobURL(`${baseURLFFMPEG}/814.ffmpeg.js`, 'text/javascript'),
+            coreURL: await toBlobURL(`${baseURLCoreMT}/ffmpeg-core.js`, 'text/javascript'),
+            wasmURL: await toBlobURL(`${baseURLCoreMT}/ffmpeg-core.wasm`, 'application/wasm'),
+            workerURL: await toBlobURL(`${baseURLCoreMT}/ffmpeg-core.worker.js`, 'application/javascript'),
+        });
+    } else {
+        console.log("single-threaded");
+        await ffmpeg.load({
+            workerLoadURL: await toBlobURL(`${baseURLFFMPEG}/814.ffmpeg.js`, 'text/javascript'),
+            coreURL: await toBlobURL(`${baseURLCore}/ffmpeg-core.js`, 'text/javascript'),
+            wasmURL: await toBlobURL(`${baseURLCore}/ffmpeg-core.wasm`, 'application/wasm'),
+        });
+    }
+    console.log('ffmpeg load success');
+}
+
+function downloadFileByBlob(blobUrl, filename) {
+    const eleLink = document.createElement('a')
+    eleLink.download = filename
+    eleLink.style.display = 'none'
+    eleLink.href = blobUrl
+    document.body.appendChild(eleLink)
+    eleLink.click()
+    document.body.removeChild(eleLink)
+}
+
+</script>
+<script>
+new Vue({
+    el: '#app',
+    data: {
+        loading: false,
+        fileList: [],
+        file: null,
+        params: "-s 240x240 -c:v mjpeg -q:v 0",
+        outputName: "output.mjpeg"
+    },
+    mounted: async function() {
+        this.loading = true;
+        await load();
+        this.loading = false;
+        log("FFmpeg Loaded!");
+    },
+    methods: {
+        handleFiles(file, fileList) {
+            this.file = file;
+            this.fileList = fileList;
+        },
+        handleExceed(files, fileList) {
+            this.$set(fileList[0], 'raw', files[0]);
+            this.$set(fileList[0], 'name', files[0].name);
+            this.$refs.upload.clearFiles();
+            this.$refs.upload.handleStart(files[0]);
+        },
+        start: async function() {
+            const file = this.file;
+            this.loading = true;
+            console.log(file.name);
+            const inputDir = '/input';
+            const inputFile = `${inputDir}/${file.name}`;
+            await ffmpeg.createDir(inputDir);
+            await ffmpeg.mount('WORKERFS', {
+                files: [file.raw],
+            }, inputDir);
+            var args = ['-i', inputFile];
+            var params = this.params.trim();
+            if (params != "") args = args.concat(params.split(" "));
+            args.push(this.outputName);
+            console.log(args);
+            await ffmpeg.exec(args);
+            const data = await ffmpeg.readFile(this.outputName);
+            downloadFileByBlob(URL.createObjectURL(new Blob([data.buffer], {
+                type: "application/octet-stream"
+            })), this.outputName);
+            await ffmpeg.unmount(inputDir);
+            await ffmpeg.deleteDir(inputDir);
+            this.loading = false;
+            log("正在导出文件...")
+        }
+    }
+})
+</script>
+</html>
